@@ -521,7 +521,7 @@ class GANModel(nn.Module):
 
         # text model
         self.text_config = text_config
-        # self.encoder = UnimoEncoder(vision_config=self.vision_config, text_config=self.text_config)
+        self.encoder = UnimoEncoder(vision_config=self.vision_config, text_config=self.text_config)
         self.args = args
         
         self.text_model = AutoModel.from_pretrained(args.name_path_dict[text_model_name])
@@ -558,11 +558,9 @@ class GANModel(nn.Module):
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, position_ids=position_ids, inputs_embeds=inputs_embeds)
         text_feature = text_outputs["last_hidden_state"]  #16, 60, 768
         
-        # image_outputs = self.image_model(pixel_values)
-        # image_feature = image_outputs["last_hidden_state"]   # 16, 197, 768
+        image_outputs = self.image_model(pixel_values)
+        image_feature = image_outputs["last_hidden_state"]   # 16, 197, 768
         
-
-        fusion = text_feature
         
         # converted_image_feature = self.vismap2text(image_feature)  # self.batch_size, hidden_dim
 
@@ -584,28 +582,30 @@ class GANModel(nn.Module):
         # print("final", final_output.size())
         
         
-        
-        sequence_output1 = self.dropout(fusion)
+
+        if self.args.add_gan:
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            encoder_outputs = self.encoder(
+                vision_embeds=image_feature,
+                text_embeds=text_feature,
+                attention_mask=extended_attention_mask,
+                output_attentions=True,
+                output_hidden_states=True,
+                return_dict=return_dict,
+            )
+
+            text_feature = encoder_outputs.last_text_state
+            image_feature = encoder_outputs.last_vision_state
+
+
+        sequence_output1 = self.dropout(text_feature)
         text_token_logits = self.classifier1(sequence_output1)
-
-        # if self.args.add_gan:
-        #     extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-        #     encoder_outputs = self.encoder(
-        #         vision_embeds=image_last_hidden_states,
-        #         text_embeds=text_last_hidden_states,
-        #         attention_mask=extended_attention_mask,
-        #         output_attentions=True,
-        #         output_hidden_states=True,
-        #         return_dict=return_dict,
-        #     )
-
-        #     text_last_hidden_states = encoder_outputs.last_text_state
-        #     image_last_hidden_states = encoder_outputs.last_vision_state
-
+        
         # * text only # text_loss
         # loss_fct = GCELoss()            
         # weights = torch.ones(labels.shape).to(labels.device)
         # text_loss = loss_fct(text_token_logits.view(-1, self.text_num_labels), labels.view(-1), weights)
+        
         text_loss = self.loss_fct(text_token_logits.view(-1, self.text_num_labels), labels.view(-1))
         if self.args.only_text_loss :
             #  * vision-aware text # cross_crf_loss
